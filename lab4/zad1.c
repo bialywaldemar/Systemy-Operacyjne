@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
-// #include <unistd.h>
+#include <unistd.h>
 #include <sys/types.h>
-// #include <sys/wait.h>
+#include <sys/wait.h>
 
 int main(int argc, char *argv[])
 {
@@ -19,8 +19,9 @@ int main(int argc, char *argv[])
 
         else if (pid == 0){
             printf("Parent PID: %d, Process PID: %d\n", getppid(), getpid());
-            return 0;
+            // return 0;
         }
+        sleep(1);
     }
     for (int i = 0; i < n; i++) {
         wait(NULL);
