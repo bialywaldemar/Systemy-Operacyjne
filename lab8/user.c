@@ -1,4 +1,3 @@
-#include "common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <semaphore.h>
@@ -26,7 +25,7 @@ typedef struct {
 } PrintQueue;
 
 char* random_chars(){
-    char res[TEXT_LEN + 1];
+    char* res = malloc(TEXT_LEN + 1);
     if(res == NULL){
         return NULL;
     }
@@ -34,12 +33,13 @@ char* random_chars(){
         res[i] = 'a' + rand() % 26;
     }
     res[TEXT_LEN] = '\0';
-    return res
+    return res;
 }
 
 int main() {
     srand(getpid());
     int shm_fd = shm_open(SHM_NAME, O_RDWR, 0666);
+    PrintQueue* queue = mmap(NULL, sizeof(PrintQueue), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
 
     sem_t* mutex = sem_open(SEM_MUTEX, 0);
     sem_t* full = sem_open(SEM_FULL, 0);
