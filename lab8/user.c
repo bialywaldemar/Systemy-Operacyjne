@@ -54,7 +54,7 @@ int main() {
         sem_post(mutex);
         sem_post(empty);
         printf("[USER %d] Wyslano zadanie: %s\n", getpid(), text);
-        sleep(1 + rand() % 6);
+        sleep(5 + rand() % 6);
     }
     return 0;
 }
