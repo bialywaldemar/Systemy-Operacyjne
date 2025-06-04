@@ -18,7 +18,7 @@
 #define M 3 // drukarki
 #define S 1
 #define TEXT_LEN 10
-#define TASKS 10
+#define TASKS 1
 
 typedef struct {
     char jobs[TASKS][TEXT_LEN + 1];

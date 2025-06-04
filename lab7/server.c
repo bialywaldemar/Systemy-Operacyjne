@@ -60,7 +60,7 @@ int main(){
                 continue;
             }
             char *client_queue_name = buffer + 5;
-            printf("Otrzymano INIT od %s\n", client_queue_name);
+            printf("\nOtrzymano INIT od %s\n", client_queue_name);
 
             mqd_t client_mq = mq_open(client_queue_name, O_WRONLY);
             if (client_mq == -1) {

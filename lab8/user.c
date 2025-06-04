@@ -16,10 +16,10 @@
 #define N 8 // uzytkownicy, zadania
 #define M 3 // drukarki
 #define S 1
-#define TASKS 10
+#define TASKS 1
 
 typedef struct {
-    char jobs[N][TEXT_LEN + 1];
+    char jobs[TASKS][TEXT_LEN + 1];
     int in;
     int out;
 } PrintQueue;
@@ -47,12 +47,12 @@ int main() {
 
     while(1){
         char* text = random_chars();
-        sem_wait(full);
+        sem_wait(full); // full - 1
         sem_wait(mutex);
         strcpy(queue->jobs[queue->in], text);
         queue->in = (queue->in + 1) % TASKS;
         sem_post(mutex);
-        sem_post(empty);
+        sem_post(empty); // +1
         printf("[USER %d] Wyslano zadanie: %s\n", getpid(), text);
         sleep(5 + rand() % 6);
     }
