@@ -51,7 +51,7 @@ void* patient_fun(void* arg) {
             print_time();
             printf("Pacjent (%d): budze lekarza\n", id);
             waiting_patients += 1;
-            pthread_cond_signal(&doctor_sleep_cond);
+            pthread_cond_broadcast(&doctor_sleep_cond);
             pthread_cond_wait(&consultation_done_cond, &mutex);
             pthread_mutex_unlock(&mutex);
             break;
