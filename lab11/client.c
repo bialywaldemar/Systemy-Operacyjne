@@ -5,29 +5,53 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include<signal.h>
+#include <signal.h>
+#include <arpa/inet.h>
+#include <pthread.h>
 
 #define SERVER_QUEUE "/server_queue"
 #define MAX_SIZE 256
+#define MAX_NAME 32
 
+int sock;
 int running = 1;
+char client_name[MAX_NAME];
 
 void handle_sigint(int sig){
     running = 0;
     printf("\nZamykanie klienta\n");
+    send(sock, "STOP", 4, 0);
+    close(sock);
+    exit(0);
 }
 
-int main(int argc, char* argv[]){
-    if (argc != 3) {
+void* receiving(void* arg) {
+    char buf[MAX_SIZE];
+    while(running) {
+        memset(buf, 0, MAX_SIZE);
+
+    }
+}
+
+int main(int argc, char* argv[]){ // name, server, port
+    if (argc != 4) {
         return 1;
     }
+    signal(SIGINT, handle_sigint);
+    strncpy(client_name, argv[1], MAX_NAME);
 
-
-    char client_queue[64];
+    char* ip = argv[2];
+    int port = atoi(argv[3]);
     char msg[256];
     char response[256];
 
-    sprintf(client_queue, "/client_%d", argv[1]);
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        exit(1);
+    }
+
+    sprintf(client_name, "%d", argv[1]);
     struct mq_attr attr = {0, 10, 256, 0};
 
     mqd_t mq = mq_open(client_queue, O_CREAT | O_RDONLY, 0644, &attr);

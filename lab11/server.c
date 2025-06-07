@@ -6,15 +6,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
+#include <sys/time.h>
 
 #define SERVER_QUEUE "/server_queue"
 #define MAX_SIZE 256
 #define MAX_CLIENTS 12
+#define MAX_NAME 32
 
 typedef struct {
+    int id;
     int sock;
-    char name[64];
-    int active
+    char name[MAX_NAME];
+    int active;
 }ClientInfo;
 
 ClientInfo clients[MAX_CLIENTS];
@@ -22,16 +26,49 @@ pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int client_cnt = 0;
 
+void print_time(char* buffer, size_t size) {
+    time_t now = time(NULL);
+    struct tm* t = localtime(&now);
+    strftime(buffer, size, "%Y-%m-%d %H:%M:%S", t);
+}
+
 void list() {
     printf("Lista klientów:\n");
     for(int i = 0; i < client_cnt; i++) {
-        printf("%d. %s", i + 1, clients[i].name);
+        printf("%d. %s\n", i + 1, clients[i].name);
     }
 }
 
-void to_all_string(char* msg, int id) {
+void to_all_string(char* msg, int sender_id, char* sender_name) {
+    pthread_mutex_lock(&clients_mutex);
+    char time_buf[64];
+    print_time(time_buf, sizeof(time_buf));
 
+    char full_msg[MAX_SIZE];
+    snprintf(full_msg, sizeof(full_msg), "[%s][%s]: %s\n", time_buf, sender_name, msg);
+    for (int i = 0 ; i < MAX_CLIENTS; i++) {
+        if (clients[i].active && clients[i].id != sender_id) {
+            send(clients[i].sock, full_msg, strlen(full_msg), 0);
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
 }
+
+void to_one_string(char* msg, int sender_id, int receiver_id, char* sender_name) {
+    pthread_mutex_lock(&clients_mutex);
+    char time_buf[64];
+    print_time(time_buf, sizeof(time_buf));
+
+    char full_msg[MAX_SIZE];
+    snprintf(full_msg, sizeof(full_msg), "[%s][%s]: %s\n", time_buf, sender_name, msg);
+    for (int i = 0 ; i < MAX_CLIENTS; i++) {
+        if (clients[i].active && clients[i].id == receiver_id) {
+            send(clients[i].sock, full_msg, strlen(full_msg), 0);
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+}
+
 
 
 void handle_sigint (int sig){

@@ -21,7 +21,7 @@ typedef struct {
 void print_time() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    printf("[%ld.%06ld] - ", tv.tv_sec, tv.tv_usec);
+    printf("[%ld.%02ld] - ", tv.tv_sec, tv.tv_usec);
 }
 
 
