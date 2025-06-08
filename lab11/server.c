@@ -8,6 +8,9 @@
 #include <signal.h>
 #include <time.h>
 #include <sys/time.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <pthread.h>
 
 #define SERVER_QUEUE "/server_queue"
 #define MAX_SIZE 256
@@ -25,6 +28,7 @@ ClientInfo clients[MAX_CLIENTS];
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int client_cnt = 0;
+int running = 1;
 
 void print_time(char* buffer, size_t size) {
     time_t now = time(NULL);
@@ -69,6 +73,81 @@ void to_one_string(char* msg, int sender_id, int receiver_id, char* sender_name)
     pthread_mutex_unlock(&clients_mutex);
 }
 
+void* client_fun(void* arg) { // funkcja do watku klienta
+    int client_sock = *((int*)arg);
+    free(arg);
+
+    char name[MAX_NAME];
+    recv(client_sock, name, MAX_NAME, 0);
+
+    pthread_mutex_lock(&clients_mutex);
+    int id = client_cnt;
+    clients[client_cnt++] = (ClientInfo){ .id = id, .sock = client_sock, .active = 1};
+    strncpy(clients[id].name, name, MAX_NAME);
+    pthread_mutex_unlock(&clients_mutex);
+
+    char buffer[MAX_SIZE];
+    while(1) {
+        memset(buffer, 0, MAX_SIZE);
+        int read_size = recv(client_sock, buffer, MAX_SIZE, 0);
+        if (read_size <= 0) {
+            break;
+        }
+
+        if (strncmp("LIST", buffer, 4) == 0) {
+            pthread_mutex_lock(&clients_mutex);
+            char list_buf[MAX_SIZE] = "";
+            for (int i = 0; i < client_cnt; i++) {
+                if (clients[i].active) {
+                    char tmp[64];
+                    snprintf(tmp, sizeof(tmp), "%d. %s\n", clients[i].id, clients[i].name);
+                    strncat(list_buf, tmp, MAX_SIZE - strlen(list_buf) - 1);
+                }
+            }
+            send(client_sock, list_buf, strlen(list_buf), 0);
+            pthread_mutex_unlock(&clients_mutex);
+        }
+
+        else if (strncmp("2ALL", buffer, 4) == 0) {
+            to_all_string(buffer + 5, id, name);
+        }
+
+        else if (strncpy("2ONE", buffer, 4) == 0) {
+            int target_id;
+            char msg[MAX_SIZE];
+            sscanf(buffer + 5, "%d %[^\n]", &target_id, msg);
+            to_one_string(msg, id, target_id, name);
+        }
+
+        else if (strncpy("STOP", buffer, 4) == 0) {
+            break;
+        }
+    }
+    pthread_mutex_lock(&clients_mutex);
+    clients[id].active = 0;
+    close(client_sock);
+    pthread_mutex_unlock(&clients_mutex);
+
+    return NULL;
+}
+
+void* server_fun(void* arg) { // funkcja do watku serwera
+    while (running) {
+        pthread_mutex_lock(&clients_mutex);
+        for (int i = 0; i < client_cnt; i++) {
+            if (clients[i].active) {
+                if (send(clients[i].sock, "ALIVE?\n", 6, 0) <= 0) {
+                    clients[i].active = 0;
+                    close(clients[i].sock);
+                }
+            }
+        }
+        pthread_mutex_unlock(&clients_mutex);
+        sleep(15);
+    }
+    return NULL;
+}
+
 
 
 void handle_sigint (int sig){
@@ -77,75 +156,58 @@ void handle_sigint (int sig){
     exit(0);
 }
 
-int main(){
+int main(int argc, char* argv[]){
+    if (argc != 2) {
+        exit(1);
+    }
+    int port = atoi(argv[1]);
+
     signal(SIGINT, handle_sigint);
-    mqd_t mq;
-    char buffer[MAX_SIZE];
-
-    struct mq_attr attr;
-    attr.mq_flags = 0;
-    attr.mq_maxmsg = 10;
-    attr.mq_msgsize = MAX_SIZE;
-    attr.mq_curmsgs = 0;
-
-    mq = mq_open(SERVER_QUEUE, O_CREAT | O_RDONLY, 0644, &attr);
-    if(mq == -1){
-        perror("mq_open (serwer)");
+    
+    int server_fd;
+    server_fd = socket(AF_INET, SOCK_STREAM, 0); // domain (af_inet oznacza polaczenie internetowe ), type (sock stream albo sock dgram), protocol (protocol zazwyczaj 0)
+    if (server_fd == -1) {
+        perror("error socket");
         exit(1);
     }
 
-    printf("Serwer czeka na INIT\n");
-    while(1){
-        memset(buffer, 0, MAX_SIZE);
-    
-        if(mq_receive(mq, buffer, MAX_SIZE, NULL) == -1) {
-            perror("mq_receive");
-            exit(1);
-        }
+    struct sockaddr_in server_addr =  // struktura zawierajaca sin_family, sin_port;, sin_addr
+    {
+        .sin_family = AF_INET,
+        .sin_port = htons(port), // port w sieciowym bajtowym porządku
+        .sin_addr.s_addr = INADDR_ANY // każda karta sieciowa
+    };
 
-        if(strncmp(buffer, "INIT:", 5) == 0) // nowy klient
-        {
-            if(client_cnt >= MAX_CLIENTS) {
-                printf("Jest maksymalna liczba klientów\n");
-                continue;
-            }
-            char *client_queue_name = buffer + 5;
-            printf("\nOtrzymano INIT od %s\n", client_queue_name);
-
-            mqd_t client_mq = mq_open(client_queue_name, O_WRONLY);
-            if (client_mq == -1) {
-                perror("mq_open(cl queue)");
-                continue;
-            }
-
-            clients[client_cnt].id = client_cnt;
-            strncpy(clients[client_cnt].queue_name, client_queue_name, sizeof(clients[client_cnt].queue_name));
-            clients[client_cnt].mq = client_mq;
-
-            char response[MAX_SIZE];
-            sprintf(response, "ID:%d", client_cnt++);
-            mq_send(client_mq, response, strlen(response) + 1, 0);
-            printf("Wyslano %s do %s", response, client_queue_name);
-        }
-        else // wiadomosc
-        {
-            int sender_id;
-            char msg[MAX_SIZE];
-            if(sscanf(buffer, "%d:%[^\n]", &sender_id, msg) == 2) {
-                printf("\nOtrzymano wiadomosc od klienta %d: %s\n", sender_id, msg);
-                char curr_msg[MAX_SIZE];
-                sprintf(curr_msg, "Klient %d: %s", sender_id, msg);
-                for (int i = 0; i < client_cnt; i++){
-                    if(clients[i].id != sender_id) {
-                        if (mq_send(clients[i].mq, curr_msg, strlen(curr_msg) + 1, 0) == -1) {
-                            perror("mq_send do klientow");
-                        }
-                    }
-                }
-            }
-        }
+    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
+        exit(1);
     }
-    mq_close(mq);
+
+    if (listen(server_fd, MAX_CLIENTS) < 0) {
+        perror("listen");
+        exit(1);
+    }
+
+    printf("Serwer czeka na porcie %d\n", port);
+    // alive ping
+    pthread_t server_tid;
+    pthread_create(&server_tid, NULL, server_fun, NULL);
+
+    while (running) {
+        // nowe polaczenia
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
+        if (client_sock < 0) {
+            perror("accept");
+            continue;
+        }
+
+        pthread_t tid;
+        int* pclient = malloc(sizeof(int));
+        *pclient = client_sock;
+        pthread_create(&tid, NULL, client_fun, pclient);
+    }
+    close(server_fd);
     return 0;
 }
-

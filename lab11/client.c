@@ -8,6 +8,11 @@
 #include <signal.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>  
+#include <netinet/in.h>  
+
 
 #define SERVER_QUEUE "/server_queue"
 #define MAX_SIZE 256
@@ -16,6 +21,7 @@
 int sock;
 int running = 1;
 char client_name[MAX_NAME];
+struct sockaddr_in server_addr;
 
 void handle_sigint(int sig){
     running = 0;
@@ -29,19 +35,22 @@ void* receiving(void* arg) {
     char buf[MAX_SIZE];
     while(running) {
         memset(buf, 0, MAX_SIZE);
-
+        int n = recv(sock, buf, MAX_SIZE, 0);
+        if (n > 0) {
+            printf("%s", buf);
+        }
     }
+    return NULL;
 }
 
-int main(int argc, char* argv[]){ // name, server, port
-    if (argc != 4) {
+int main(int argc, char* argv[]){ // name, port
+    if (argc != 3) {
         return 1;
     }
     signal(SIGINT, handle_sigint);
     strncpy(client_name, argv[1], MAX_NAME);
 
-    char* ip = argv[2];
-    int port = atoi(argv[3]);
+    int port = atoi(argv[2]);
     char msg[256];
     char response[256];
 
@@ -51,74 +60,33 @@ int main(int argc, char* argv[]){ // name, server, port
         exit(1);
     }
 
-    sprintf(client_name, "%d", argv[1]);
-    struct mq_attr attr = {0, 10, 256, 0};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); // localhost
 
-    mqd_t mq = mq_open(client_queue, O_CREAT | O_RDONLY, 0644, &attr);
-    if(mq == -1){
-        perror("mq_open");
+    //laczenie z serwerem
+    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("connect");
         exit(1);
     }
 
-    mqd_t server_mq = mq_open(SERVER_QUEUE, O_WRONLY);
-    if(server_mq == -1){
-        perror("server mq_open");
-        exit(1);
-    }
-    sprintf(msg, "INIT:%s", client_queue);
-    if(mq_send(server_mq, msg, strlen(msg) + 1, 0) == -1){
-        perror("mq_send");
-        exit(1);
-    }
-    printf("Klient %d wyslal %s\n", getpid(), msg);
-
-    mq_receive(mq, response, 256, NULL);
-    printf("Klient %d otrzymal %s\n", getpid(), response);
-    printf("Aby zakonczyc rozmowe wcisnij CTRL+C\n");
-
-    int id;
-    sscanf(response, "ID:%d", &id);
-    pid_t pid = fork();
-    if(pid > 0) // wysylanie
-    {
-        while(running){
-            memset(msg, 0, MAX_SIZE);
-            printf("Podaj komunikat: ");
-            if(fgets(msg, MAX_SIZE, stdin) != NULL) {
-                msg[strcspn(msg, "\n")] = 0;
-                char curr_msg[MAX_SIZE];
-                sprintf(curr_msg, "%d:%s", id, msg);
-                if(mq_send(server_mq, curr_msg, strlen(curr_msg) + 1, 0) == -1){
-                    perror("mq_send komunikat");
-                    exit(1);
-                }
-            }
-            else{
-                perror("blad komunikat\n");
-                exit(1);
-            }
-        }
-    }
-    else if (pid == 0) // odczyt 
-    {
-        signal(SIGINT, handle_sigint);
-        while(1){
-            char incoming[MAX_SIZE];
-            if(mq_receive(mq, incoming, MAX_SIZE, NULL) > 0){
-                printf("\nODCZYT: %s\nPodaj komunikat:", incoming);
-            }
-        }
-    }
-
-    else {
-        perror("fork");
-        exit(1);
-    }
-
+    send(sock, client_name, strlen(client_name), 0);
     
-    mq_close(mq);
-    mq_unlink(client_queue);
-    mq_close(server_mq);
-    exit(0);
+    pthread_t recv_thread;
+    pthread_create(&recv_thread, NULL, receiving, NULL);
+    while (running) {
+        printf("> ");
+        fgets(msg, sizeof(msg), stdin);
+        msg[strcspn(msg, "\n")] = 0; // usuń newline
+
+        if (strncmp(msg, "STOP", 4) == 0) {
+            send(sock, "STOP", 4, 0);
+            running = 0;
+            break;
+        } else {
+            send(sock, msg, strlen(msg), 0);
+        }
+    }
+
     return 0;
 }
