@@ -54,7 +54,7 @@ int main(int argc, char* argv[]){ // name, port
     char msg[256];
     char response[256];
 
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
         exit(1);

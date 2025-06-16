@@ -19,9 +19,9 @@
 
 typedef struct {
     int id;
-    int sock;
     char name[MAX_NAME];
     int active;
+    struct sockaddr_in addr;
 }ClientInfo;
 
 ClientInfo clients[MAX_CLIENTS];
@@ -43,7 +43,7 @@ void list() {
     }
 }
 
-void to_all_string(char* msg, int sender_id, char* sender_name) {
+void to_all_string(char* msg, int sender_id, char* sender_name, int server_sock) {
     pthread_mutex_lock(&clients_mutex);
     char time_buf[64];
     print_time(time_buf, sizeof(time_buf));
@@ -52,13 +52,13 @@ void to_all_string(char* msg, int sender_id, char* sender_name) {
     snprintf(full_msg, sizeof(full_msg), "[%s][%s]: %s\n", time_buf, sender_name, msg);
     for (int i = 0 ; i < MAX_CLIENTS; i++) {
         if (clients[i].active && clients[i].id != sender_id) {
-            send(clients[i].sock, full_msg, strlen(full_msg), 0);
+            sendto(server_sock, full_msg, strlen(full_msg), 0, (struct sockaddr*)&clients[i].addr, sizeof(clients[i].addr));
         }
     }
     pthread_mutex_unlock(&clients_mutex);
 }
 
-void to_one_string(char* msg, int sender_id, int receiver_id, char* sender_name) {
+void to_one_string(char* msg, int sender_id, int receiver_id, char* sender_name, int server_sock) {
     pthread_mutex_lock(&clients_mutex);
     char time_buf[64];
     print_time(time_buf, sizeof(time_buf));
@@ -67,33 +67,47 @@ void to_one_string(char* msg, int sender_id, int receiver_id, char* sender_name)
     snprintf(full_msg, sizeof(full_msg), "\n[%s][%s]: %s\n", time_buf, sender_name, msg);
     for (int i = 0 ; i < MAX_CLIENTS; i++) {
         if (clients[i].active && clients[i].id == receiver_id) {
-            send(clients[i].sock, full_msg, strlen(full_msg), 0);
+            sendto(server_sock, full_msg, strlen(full_msg), 0, (struct sockaddr*)&clients[i].addr, sizeof(clients[i].addr));
         }
     }
     pthread_mutex_unlock(&clients_mutex);
 }
 
 void* client_fun(void* arg) { // funkcja do watku klienta
-    int client_sock = *((int*)arg);
-    free(arg);
-
-    char name[MAX_NAME];
-    int read_size = recv(client_sock, name, MAX_NAME, 0);
-    name[read_size] = '\0';
-
-    pthread_mutex_lock(&clients_mutex);
-    int id = client_cnt;
-    clients[client_cnt++] = (ClientInfo){ .id = id, .sock = client_sock, .active = 1};
-    strncpy(clients[id].name, name, MAX_NAME);
-    pthread_mutex_unlock(&clients_mutex);
-
+    int server_sock = *((int*)arg);
     char buffer[MAX_SIZE];
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+
     while(1) {
         memset(buffer, 0, MAX_SIZE);
-        int read_size = recv(client_sock, buffer, MAX_SIZE, 0);
-        if (read_size <= 0) {
-            break;
+        int read_size = recvfrom(server_sock, buffer, MAX_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
+        if (read_size < 0) {
+            continue;
         }
+        buffer[read_size] = '\0';
+
+        pthread_mutex_lock(&clients_mutex);
+        int id = -1;
+        for (int i = 0; i < client_cnt; i++) {
+            if (clients[i].active &&
+                clients[i].addr.sin_addr.s_addr == client_addr.sin_addr.s_addr &&
+                clients[i].addr.sin_port == client_addr.sin_port) {
+                id = i;
+                break;
+            }
+        }
+
+        if (id == -1) {
+            id = client_cnt++;
+            clients[id].id = id;
+            clients[id].addr = client_addr;
+            clients[id].active = 1;
+            strncpy(clients[id].name, buffer, MAX_NAME); 
+            pthread_mutex_unlock(&clients_mutex);
+            continue;
+        }
+        pthread_mutex_unlock(&clients_mutex);
 
         if (strncmp("LIST", buffer, 4) == 0) {
             pthread_mutex_lock(&clients_mutex);
@@ -105,49 +119,47 @@ void* client_fun(void* arg) { // funkcja do watku klienta
                     strncat(list_buf, tmp, MAX_SIZE - strlen(list_buf) - 1);
                 }
             }
-            send(client_sock, list_buf, strlen(list_buf), 0);
+            sendto(server_sock, list_buf, strlen(list_buf), 0, (struct sockaddr*)&client_addr, addr_len);
             pthread_mutex_unlock(&clients_mutex);
         }
 
         else if (strncmp("2ALL", buffer, 4) == 0) {
-            to_all_string(buffer + 5, id, name);
+            to_all_string(buffer + 5, id, clients[id].name, server_sock);
         }
 
         else if (strncmp("2ONE", buffer, 4) == 0) {
             int target_id;
             char msg[MAX_SIZE];
             sscanf(buffer + 5, "%d %[^\n]", &target_id, msg);
-            to_one_string(msg, id, target_id, name);
+            to_one_string(msg, id, target_id, clients[id].name, server_sock);
         }
 
         else if (strncmp("STOP", buffer, 4) == 0) {
-            break;
+            pthread_mutex_lock(&clients_mutex);
+            clients[id].active = 0;
+            pthread_mutex_unlock(&clients_mutex);
         }
     }
-    pthread_mutex_lock(&clients_mutex);
-    clients[id].active = 0;
-    close(client_sock);
-    pthread_mutex_unlock(&clients_mutex);
 
     return NULL;
 }
 
-void* server_fun(void* arg) { // funkcja do watku serwera
-    while (running) {
-        pthread_mutex_lock(&clients_mutex);
-        for (int i = 0; i < client_cnt; i++) {
-            if (clients[i].active) {
-                if (send(clients[i].sock, "ALIVE?\n", 6, 0) <= 0) {
-                    clients[i].active = 0;
-                    close(clients[i].sock);
-                }
-            }
-        }
-        pthread_mutex_unlock(&clients_mutex);
-        sleep(15);
-    }
-    return NULL;
-}
+// void* server_fun(void* arg) { // funkcja do watku serwera
+//     while (running) {
+//         pthread_mutex_lock(&clients_mutex);
+//         for (int i = 0; i < client_cnt; i++) {
+//             if (clients[i].active) {
+//                 if (send(clients[i].sock, "ALIVE?\n", 6, 0) <= 0) {
+//                     clients[i].active = 0;
+//                     // close(clients[i].sock);
+//                 }
+//             }
+//         }
+//         pthread_mutex_unlock(&clients_mutex);
+//         sleep(15);
+//     }
+//     return NULL;
+// }
 
 
 
@@ -166,7 +178,7 @@ int main(int argc, char* argv[]){
     signal(SIGINT, handle_sigint);
     
     int server_fd;
-    server_fd = socket(AF_INET, SOCK_STREAM, 0); // domain (af_inet oznacza polaczenie internetowe ), type (sock stream albo sock dgram), protocol (protocol zazwyczaj 0)
+    server_fd = socket(AF_INET, SOCK_DGRAM, 0); // domain (af_inet oznacza polaczenie internetowe ), type (sock stream albo sock dgram), protocol (protocol zazwyczaj 0)
     if (server_fd == -1) {
         perror("error socket");
         exit(1);
@@ -184,32 +196,36 @@ int main(int argc, char* argv[]){
         exit(1);
     }
 
-    if (listen(server_fd, MAX_CLIENTS) < 0) {
-        perror("listen");
-        exit(1);
-    }
+    // if (listen(server_fd, MAX_CLIENTS) < 0) {
+    //     perror("listen");
+    //     exit(1);
+    // }
 
     printf("Serwer czeka na porcie %d\n", port);
     // alive ping
-    pthread_t server_tid;
-    pthread_create(&server_tid, NULL, server_fun, NULL);
+    // pthread_t server_tid;
+    // pthread_create(&server_tid, NULL, server_fun, NULL);
 
-    while (running) {
-        // nowe polaczenia
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
-        int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
-        if (client_sock < 0) {
-            perror("accept");
-            continue;
-        }
+    // while (running) {
+    //     // nowe polaczenia
+    //     struct sockaddr_in client_addr;
+    //     socklen_t addr_len = sizeof(client_addr);
+    //     int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
+    //     if (client_sock < 0) {
+    //         perror("accept");
+    //         continue;
+    //     }
 
-        pthread_t tid;
-        int* pclient = malloc(sizeof(int));
-        *pclient = client_sock;
-        pthread_create(&tid, NULL, client_fun, pclient);
-        pthread_detach(tid);
-    }
+    //     pthread_t tid;
+    //     int* pclient = malloc(sizeof(int));
+    //     *pclient = client_sock;
+    //     pthread_create(&tid, NULL, client_fun, pclient);
+    //     pthread_detach(tid);
+    // }
+    pthread_t client_tid;
+    pthread_create(&client_tid, NULL, client_fun, &server_fd);
+    pthread_join(client_tid, NULL);
+
     close(server_fd);
     return 0;
 }
